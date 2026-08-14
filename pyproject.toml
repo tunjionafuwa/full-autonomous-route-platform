@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling>=1.25.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "full-autonomous-route-platform"
+version = "0.1.0"
+description = "Time-constrained, pattern-aware city route generator prototype"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic==0.34.2",
+    "asyncpg==0.31.0",
+    "fastapi==0.115.0",
+    "folium>=0.20.0",
+    "geopandas>=1.0.0",
+    "networkx>=3.2.0",
+    "openai==2.44.0",
+    "osmnx>=2.0.0",
+    "pandas==2.2.3",
+    "pydantic==2.9.2",
+    "pydantic-settings==2.5.2",
+    "pyproj>=3.6.0",
+    "python-dotenv==1.0.1",
+    "requests==2.32.3",
+    "scikit-learn>=1.9.0",
+    "shapely>=2.0.0",
+    "sqlalchemy[asyncio]==2.0.35",
+    "streamlit==1.39.0",
+    "streamlit-folium>=0.22.0",
+    "uvicorn[standard]==0.30.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/city_route"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
