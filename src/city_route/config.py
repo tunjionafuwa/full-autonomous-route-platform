@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 class RoutingConfig:
     target_time_seconds: float = 1800.0
     max_time_seconds: float | None = None
+    overshoot_penalty_weight: float = 2.0
     time_tolerance_ratio: float = 0.05
     time_tolerance_min_seconds: float = 60.0
     pattern_weight: float = 1.2

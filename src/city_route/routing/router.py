@@ -68,6 +68,12 @@ class RoutePlanner:
             return float(raw.get("travel_time", raw.get("length", 1.0)))
         return 1.0
 
+    def _duration_loss(self, duration: float, target_seconds: float) -> tuple[float, bool]:
+        deviation = duration - target_seconds
+        if deviation > 0:
+            return round(deviation * self.config.overshoot_penalty_weight, 9), True
+        return round(-deviation, 9), False
+
     def route(self, graph: nx.Graph, start: str, end: str) -> RouteResult:
         if start not in graph or end not in graph:
             return RouteResult(
@@ -121,18 +127,14 @@ class RoutePlanner:
         # Minimum: at least 5 seconds for floating-point precision
         min_tolerance = max(5.0, target_seconds * tolerance_ratio)
         
-        # If shortest path is already very close to target, return it
-        if abs(shortest_time - target_seconds) <= min_tolerance:
-            return self._build_result(graph, shortest_path, set(), set(), shortest_time, [], 
-                                    reached_destination=True)
-
-        # If target is impossible (shorter than shortest path), return shortest
-        if target_seconds < shortest_time * 0.95:  # 5% tolerance for floating point
+        # The shortest route is the best possible option when it already exceeds the target.
+        if shortest_time >= target_seconds:
             return self._build_result(graph, shortest_path, set(), set(), shortest_time, [], 
                                     reached_destination=True)
 
         # DYNAMIC TARGET-TIME SEARCH: Generate diverse candidates iteratively
-        best_route, best_time, best_error = shortest_path, shortest_time, abs(shortest_time - target_seconds)
+        best_route, best_time = shortest_path, shortest_time
+        best_loss = self._duration_loss(shortest_time, target_seconds)
         visited_routes = {self._route_signature(shortest_path)}
         
         max_iterations = int(self.config.max_search_steps * 1.5)  # Increased iterations for aggressive search
@@ -176,19 +178,14 @@ class RoutePlanner:
                 visited_routes.add(route_sig)
                 
                 # Check if this candidate is better
-                candidate_error = abs(candidate_time - target_seconds)
-                if candidate_error < best_error:
-                    best_route, best_time, best_error = candidate_path, candidate_time, candidate_error
+                candidate_loss = self._duration_loss(candidate_time, target_seconds)
+                if candidate_loss < best_loss:
+                    best_route, best_time, best_loss = candidate_path, candidate_time, candidate_loss
                     found_improvement = True
-                    
-                    # If we've reached target tolerance, return immediately
-                    if candidate_error <= min_tolerance:
-                        return self._build_result(graph, best_route, set(), set(), best_time, [], 
-                                                reached_destination=True)
             
             # If we found improvements, can continue searching
             # But if error is still high (> 20%), be less aggressive about stopping
-            if best_error <= min_tolerance or (best_error <= target_seconds * 0.10 and found_improvement):
+            if best_loss[0] <= min_tolerance or (best_loss[0] <= target_seconds * 0.10 and found_improvement):
                 break
         
         return self._build_result(graph, best_route, set(), set(), best_time, [], 
@@ -208,10 +205,6 @@ class RoutePlanner:
         """Generate diverse candidate routes using multiple strategies."""
         candidates = []
         current_time = self._estimate_path_time(graph, shortest_path)
-        
-        # If already at target, no need for more candidates
-        if abs(current_time - target_seconds) <= target_seconds * 0.05:
-            return []
         
         # Calculate how much longer the route needs to be
         expansion_factor = target_seconds / current_time if current_time > 0 else 1.0
@@ -592,7 +585,7 @@ class RoutePlanner:
                     continue
         
         # Sort candidates by time to get the best expansions
-        candidates.sort(key=lambda x: abs(x[0] - target_seconds))
+        candidates.sort(key=lambda x: self._duration_loss(x[0], target_seconds))
         
         return [path for _, path in candidates[:10]]  # Return top 10 candidates
 
@@ -1029,7 +1022,7 @@ class RoutePlanner:
         step_count = 0
 
         while step_count < self.config.max_search_steps and total_duration < max_seconds:
-            choices = []
+            choices: list[tuple[tuple[float, bool], float, float, str]] = []
             for neighbor in graph.neighbors(current):
                 edge_key = self._edge_key(current, neighbor)
                 if edge_key in used_edges and (not self.config.allow_reuse or len(reused_edges) >= self.config.max_reuse_count):
@@ -1039,18 +1032,29 @@ class RoutePlanner:
                 travel_time = float(edge_data.get("travel_time", fallback))
                 if total_duration + travel_time > max_seconds:
                     continue
+
+                return_path = self._shortest_feasible_path(graph, neighbor, start)
+                if return_path is None:
+                    continue
+                projected_duration = (
+                    total_duration
+                    + travel_time
+                    + self._estimate_path_time(graph, return_path)
+                )
                 
                 score = self._path_score(graph, path + [neighbor])
-                
-                remaining_time = target_seconds - (total_duration + travel_time)
-                time_error = abs(remaining_time)
-                
-                choices.append((score, -time_error, travel_time, neighbor))
+
+                choices.append((
+                    self._duration_loss(projected_duration, target_seconds),
+                    -score,
+                    travel_time,
+                    neighbor,
+                ))
             
             if not choices:
                 break
 
-            _, _, _, best_neighbor = max(choices, key=lambda item: (item[0], item[1]))
+            _, _, _, best_neighbor = min(choices, key=lambda item: (item[0], item[1]))
             
             edge_key = self._edge_key(current, best_neighbor)
             if edge_key in used_edges:
