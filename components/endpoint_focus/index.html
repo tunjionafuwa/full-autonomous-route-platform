@@ -1,0 +1,148 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+</head>
+<body>
+<script>
+(() => {
+  let lastReportedTarget;
+
+  function reportTarget(target) {
+    const value = target || "none";
+    if (value === lastReportedTarget) return;
+    lastReportedTarget = value;
+    window.parent.postMessage({
+      isStreamlitMessage: true,
+      type: "streamlit:setComponentValue",
+      value,
+      dataType: "json"
+    }, "*");
+  }
+
+  function targetForElement(element) {
+    if (!element || typeof element.closest !== "function") return null;
+    const label = element.getAttribute("aria-label");
+    if (label === "Start") return "Start";
+    if (label === "Finish") return "Finish";
+    if (element.closest(".st-key-start, .st-key-start-input")) return "Start";
+    if (element.closest(".st-key-end, .st-key-end-input")) return "Finish";
+    return null;
+  }
+
+  function setMapCursor(enabled) {
+    try {
+      const parentDocument = window.parent.document;
+      const mapFrame = parentDocument.querySelector(".st-key-map-stage iframe, .st-key-map iframe");
+      const mapDocument = mapFrame && mapFrame.contentDocument;
+      if (!mapDocument) return;
+
+      let style = mapDocument.getElementById("wayfinder-map-cursor");
+      if (enabled && !style) {
+        style = mapDocument.createElement("style");
+        style.id = "wayfinder-map-cursor";
+        style.textContent = ".leaflet-container, .leaflet-container * { cursor: pointer !important; }";
+        mapDocument.head.appendChild(style);
+      } else if (!enabled && style) {
+        style.remove();
+      }
+    } catch (_) {
+      return;
+    }
+  }
+
+  function bindFocusListener() {
+    try {
+      const parentDocument = window.parent.document;
+      if (parentDocument.__wayfinderEndpointFocusBound) return;
+      parentDocument.__wayfinderEndpointFocusBound = true;
+      parentDocument.addEventListener("focusin", (event) => {
+        const target = targetForElement(event.target);
+        if (target) {
+          reportTarget(target);
+          setMapCursor(true);
+          return;
+        }
+        if (event.target.tagName === "IFRAME" && event.target.closest(".st-key-map-stage, .st-key-map")) {
+          setMapCursor(lastReportedTarget === "Start" || lastReportedTarget === "Finish");
+          return;
+        }
+        reportTarget(null);
+        setMapCursor(false);
+      }, true);
+
+      const syncFocusedTarget = () => {
+        const activeTarget = targetForElement(parentDocument.activeElement);
+        if (activeTarget) {
+          reportTarget(activeTarget);
+          setMapCursor(true);
+        }
+      };
+      syncFocusedTarget();
+      window.setInterval(syncFocusedTarget, 150);
+    } catch (_) {
+      reportTarget(null);
+    }
+  }
+
+  function restoreEndpointFocus(endpoint, value) {
+    if (!new Set(["Start", "Finish"]).has(endpoint) || typeof value !== "string") return;
+
+    try {
+      const parentDocument = window.parent.document;
+      const selector = endpoint === "Start"
+        ? 'input[aria-label="Start"]'
+        : 'input[aria-label="Finish"]';
+      let attempts = 0;
+
+      const focusWhenReady = () => {
+        attempts += 1;
+        const input = parentDocument.querySelector(selector);
+        if (input && input.value === value) {
+          const activeElement = parentDocument.activeElement;
+          const activeOnMap = activeElement && activeElement.tagName === "IFRAME"
+            && activeElement.closest(".st-key-map-stage, .st-key-map");
+          if (activeElement === input) {
+            if (attempts < 4) window.setTimeout(focusWhenReady, 75);
+            return;
+          }
+          if (!activeElement || activeElement === parentDocument.body
+            || activeElement === parentDocument.documentElement || activeOnMap) {
+            input.focus({ preventScroll: true });
+            if (attempts < 40) window.setTimeout(focusWhenReady, 50);
+          }
+          return;
+        }
+        if (attempts < 40) window.setTimeout(focusWhenReady, 25);
+      };
+
+      focusWhenReady();
+    } catch (_) {
+      return;
+    }
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.data && event.data.type === "streamlit:render") {
+      bindFocusListener();
+      const args = event.data.args || {};
+      if (args.focus_endpoint) {
+        restoreEndpointFocus(args.focus_endpoint, args.focus_value);
+      }
+      window.parent.postMessage({
+        isStreamlitMessage: true,
+        type: "streamlit:setFrameHeight",
+        height: 0
+      }, "*");
+    }
+  });
+
+  window.parent.postMessage({
+    isStreamlitMessage: true,
+    type: "streamlit:componentReady",
+    apiVersion: 1
+  }, "*");
+})();
+</script>
+</body>
+</html>
